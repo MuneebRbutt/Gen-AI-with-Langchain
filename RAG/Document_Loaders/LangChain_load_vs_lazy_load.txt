@@ -1,0 +1,337 @@
+LangChain DirectoryLoader: load() vs lazy_load()
+
+What does DirectoryLoader do?
+
+Suppose you have a directory:
+
+    data/
+    ├── football.txt
+    ├── cricket.txt
+    ├── hockey.txt
+    └── tennis.txt
+
+You create a loader:
+
+    from langchain_community.document_loaders import DirectoryLoader
+
+    loader = DirectoryLoader(
+        path="data",
+        glob="*.txt"
+    )
+
+DirectoryLoader finds the matching files and loads their contents as
+LangChain Document objects.
+
+The main question is:
+
+Should LangChain load all documents into memory at once, or give them to
+you one at a time as you need them?
+
+That is the main difference between load() and lazy_load().
+
+------------------------------------------------------------------------
+
+1. load() — Eager Loading
+
+When you write:
+
+    docs = loader.load()
+
+LangChain loads all matching documents first and returns them together
+as a Python list.
+
+Conceptually:
+
+    Directory
+       │
+       ├── football.txt ──┐
+       ├── cricket.txt  ──┤
+       ├── hockey.txt   ──┤──→ LOAD EVERYTHING → Python List
+       └── tennis.txt   ──┘
+
+The result looks conceptually like:
+
+    [
+        Document(...),
+        Document(...),
+        Document(...),
+        Document(...)
+    ]
+
+Because it is a list, you can immediately access items:
+
+    docs = loader.load()
+
+    print(docs[0])
+    print(docs[1])
+
+What happens with a very large directory?
+
+Imagine:
+
+    documents/
+        1.pdf
+        2.pdf
+        3.pdf
+        ...
+        10000.pdf
+
+If you run:
+
+    docs = loader.load()
+
+the process is approximately:
+
+    10,000 files
+         ↓
+    Load file 1
+    Load file 2
+    Load file 3
+    ...
+    Load file 10,000
+         ↓
+    Keep all resulting Documents in memory
+         ↓
+    Return the complete list
+
+For small datasets this is simple and convenient. For very large
+datasets, holding everything at once can consume a lot of RAM.
+
+------------------------------------------------------------------------
+
+2. lazy_load() — Lazy Loading
+
+Instead, you can write:
+
+    docs = loader.lazy_load()
+
+lazy_load() does not give you a normal list containing all loaded
+documents. It gives you an iterator/iterable that can yield documents as
+you iterate over it.
+
+For example:
+
+    for doc in loader.lazy_load():
+        print(doc.page_content)
+
+Conceptually:
+
+    Need next document?
+           ↓
+    Load/yield next document
+           ↓
+    Process it
+           ↓
+    Need next document?
+           ↓
+    Load/yield next document
+           ↓
+    ...
+
+This makes it possible to process documents incrementally rather than
+keeping the whole collection in memory at the same time.
+
+------------------------------------------------------------------------
+
+Simple Analogy
+
+Imagine there are 1,000 books in a library and you want to read them.
+
+load()
+
+The assistant brings all 1,000 books to your desk before you begin.
+
+    Library
+
+    📕 📗 📘 📙 📕
+    │  │  │  │  │
+    └──┴──┴──┴──┴────→ Your desk
+
+    Then you start working.
+
+Your desk needs enough space for all the books.
+
+lazy_load()
+
+The assistant brings one book whenever you are ready for the next one.
+
+    Book 1 → You → Process
+    Book 2 → You → Process
+    Book 3 → You → Process
+    ...
+
+You do not need to keep all 1,000 books on your desk at once.
+
+That is the basic idea of lazy loading.
+
+------------------------------------------------------------------------
+
+Important Python Concept
+
+This is not only a LangChain or AI concept. It comes from Python’s ideas
+of iterators, generators, and lazy evaluation.
+
+With:
+
+    docs = loader.lazy_load()
+
+the returned object can produce documents as you iterate:
+
+    for doc in docs:
+        print(doc.page_content)
+
+Whereas:
+
+    docs = loader.load()
+
+means:
+
+  Finish loading everything and give me the resulting list.
+
+------------------------------------------------------------------------
+
+Important Mistake to Avoid
+
+You might write:
+
+    docs = list(loader.lazy_load())
+
+This consumes the lazy iterator and creates a list containing all the
+documents.
+
+Conceptually:
+
+    lazy_load()
+         ↓
+    Document
+    Document
+    Document
+    Document
+    ...
+         ↓
+    list(...)
+         ↓
+    [doc1, doc2, doc3, doc4, ...]
+
+So you largely lose the memory advantage of processing one document at a
+time.
+
+The useful pattern is:
+
+    for doc in loader.lazy_load():
+        process(doc)
+
+------------------------------------------------------------------------
+
+Why does this matter for RAG?
+
+Imagine a RAG system with:
+
+    50,000 company documents
+
+A typical ingestion pipeline is:
+
+    Documents
+        ↓
+    Document Loader
+        ↓
+    Text Splitter
+        ↓
+    Chunks
+        ↓
+    Embedding Model
+        ↓
+    Vector Database
+
+Using:
+
+    documents = loader.load()
+
+means you load all documents before continuing.
+
+For a small project, that is perfectly fine.
+
+For a large collection, incremental processing can be more
+memory-efficient:
+
+    for document in loader.lazy_load():
+        # split this document
+        # create embeddings
+        # store chunks
+        # move to the next document
+
+Conceptually:
+
+    File 1
+      ↓
+    Load
+      ↓
+    Split
+      ↓
+    Embed
+      ↓
+    Store
+
+    File 2
+      ↓
+    Load
+      ↓
+    Split
+      ↓
+    Embed
+      ↓
+    Store
+
+    File 3
+      ↓
+    ...
+
+------------------------------------------------------------------------
+
+load() vs lazy_load()
+
+  Feature                    load()                       lazy_load()
+  -------------------------- ---------------------------- --------------------------------
+  Loading style              Eager                        Lazy
+  Result                     List of Documents            Iterator/iterable of Documents
+  Loads everything upfront   Yes                          No
+  Memory usage               Potentially higher           Potentially lower
+  Simplicity                 Very simple                  Slightly more advanced
+  Small datasets             Excellent                    Usually unnecessary
+  Large datasets             Can consume lots of memory   Better suited
+  Incremental processing     Less natural                 Excellent
+
+------------------------------------------------------------------------
+
+When should you use each?
+
+Small RAG project
+
+Use:
+
+    docs = loader.load()
+
+It is simple and convenient.
+
+Large collection of documents
+
+Consider:
+
+    for doc in loader.lazy_load():
+        process(doc)
+
+This allows you to process documents incrementally.
+
+------------------------------------------------------------------------
+
+One-Sentence Definition
+
+load() eagerly loads all documents and returns them as a list, whereas
+lazy_load() returns an iterator that yields documents as they are
+requested, making incremental processing more memory-efficient for large
+document collections.
+
+Quick Memory Trick
+
+    load()       → EAGER LOADING → everything first
+    lazy_load()  → LAZY LOADING  → one at a time as needed
